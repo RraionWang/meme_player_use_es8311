@@ -16,7 +16,9 @@
     "--compile-commands-dir=${workspaceFolder}\\build"
   ],
   "files.associations": {
-    "my_utils.h": "c"
+    "my_utils.h": "c",
+    "i2c_master.h": "c",
+    "button_gpio.h": "c"
   },
   "idf.flashType": "UART",
   "idf.portWin": "COM18"

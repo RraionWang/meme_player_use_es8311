@@ -10,6 +10,27 @@
 #include "driver/i2s_std.h"
 #include "freertos/FreeRTOS.h"
 #include "driver/i2c_master.h"
+#include "avi_player.h"
+#include "esp_jpeg_dec.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_panel_ops.h"
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
+#include "button_types.h"
+#include "button_gpio.h"
+#include "iot_button.h"
+
+
+const char *video_list[] = {
+    "/littlefs/oii.avi",
+    "/littlefs/hajimi.avi",
+     "/littlefs/happy.avi",
+};
+
+
+int video_count = sizeof(video_list) / sizeof(video_list[0]);
+int video_index = 0;
 
 
 
@@ -18,8 +39,10 @@
 #define EXAMPLE_SAMPLE_RATE     (16000)
 #define EXAMPLE_MCLK_MULTIPLE   (256) // If not using 24-bit data width, 256 should be enough
 #define EXAMPLE_MCLK_FREQ_HZ    (EXAMPLE_SAMPLE_RATE * EXAMPLE_MCLK_MULTIPLE)
-#define EXAMPLE_VOICE_VOLUME    100
+
 #define EXAMPLE_PA_CTRL_IO      46
+
+int  example_voice_volime = 40 ; 
 
 
 /* I2C port and GPIOs */
@@ -50,6 +73,12 @@ extern const uint8_t music_pcm_end[]   asm("_binary_canon_pcm_end");
 static const char *TAG_FS = "esp_littlefs";
 static const char *TAG_ES8311 = "es8311" ;
 static const char *TAG_MUSIC = "music" ; 
+static const char *TAG_AVI = "avi" ; 
+
+ avi_player_handle_t avi_player_handle;
+
+
+bool isPause = false ;
 
 void init_littlefs()
 {
@@ -83,6 +112,8 @@ void init_littlefs()
 }
 
 // es8311
+
+    esp_codec_dev_handle_t codec_handle ; 
 
  esp_err_t es8311_codec_init(void)
 {
@@ -130,7 +161,7 @@ void init_littlefs()
         .pa_pin = EXAMPLE_PA_CTRL_IO,
         .pa_reverted = false,
         .hw_gain = {
-            .pa_voltage = 5.0,
+            .pa_voltage = 3.3,
             .codec_dac_voltage = 3.3,
         },
         .mclk_div = EXAMPLE_MCLK_MULTIPLE,
@@ -144,7 +175,7 @@ void init_littlefs()
         .codec_if = es8311_if,
         .data_if = data_if,
     };
-    esp_codec_dev_handle_t codec_handle = esp_codec_dev_new(&dev_cfg);
+     codec_handle = esp_codec_dev_new(&dev_cfg);
     assert(codec_handle);
 
     /* Specify the sample configurations and open the device */
@@ -160,7 +191,7 @@ void init_littlefs()
     }
 
     /* Set the initial volume and gain */
-    if (esp_codec_dev_set_out_vol(codec_handle, EXAMPLE_VOICE_VOLUME) != ESP_CODEC_DEV_OK) {
+    if (esp_codec_dev_set_out_vol(codec_handle,  example_voice_volime) != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG_ES8311, "set output volume failed");
         return ESP_FAIL;
     }
@@ -234,3 +265,416 @@ void init_littlefs()
     }
     vTaskDelete(NULL);
 }
+
+
+
+
+#define LCD_HOST            SPI2_HOST
+#define LCD_PIXEL_CLOCK_HZ  (40 * 1000 * 1000)
+
+#define LCD_PIN_MOSI        6
+#define LCD_PIN_CLK         7
+#define LCD_PIN_CS          15
+#define LCD_PIN_DC          16
+#define LCD_PIN_RST         5
+#define LCD_PIN_BK_LIGHT    4
+#define LCD_H_RES           240
+#define LCD_V_RES           240
+#define LCD_CMD_BITS        8
+#define LCD_PARAM_BITS      8
+#define PARALLEL_LINES      16
+
+static esp_lcd_panel_handle_t panel_handle = NULL;
+
+
+void lcd_init(){
+    
+    if (LCD_PIN_BK_LIGHT >= 0) {
+        gpio_set_direction(LCD_PIN_BK_LIGHT, GPIO_MODE_OUTPUT);
+        gpio_set_level(LCD_PIN_BK_LIGHT, 0);
+    }
+    spi_bus_config_t buscfg = {
+        .sclk_io_num = LCD_PIN_CLK, .mosi_io_num = LCD_PIN_MOSI, .miso_io_num = -1,
+        .quadwp_io_num = -1, .quadhd_io_num = -1, 
+        .max_transfer_sz = PARALLEL_LINES * LCD_H_RES * 2 + 8
+    };
+    spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
+
+    esp_lcd_panel_io_handle_t io_handle = NULL;
+    esp_lcd_panel_io_spi_config_t io_config = {
+        .dc_gpio_num = LCD_PIN_DC, .cs_gpio_num = LCD_PIN_CS, .pclk_hz = LCD_PIXEL_CLOCK_HZ,
+        .lcd_cmd_bits = LCD_CMD_BITS, .lcd_param_bits = LCD_PARAM_BITS, 
+        .spi_mode = 0, .trans_queue_depth = 10,
+    };
+    esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config, &io_handle);
+
+    esp_lcd_panel_dev_config_t panel_config = {
+        .reset_gpio_num = LCD_PIN_RST,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB, 
+        .bits_per_pixel = 16,
+    };
+    esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle);
+    esp_lcd_panel_reset(panel_handle);
+    esp_lcd_panel_init(panel_handle);
+    esp_lcd_panel_invert_color(panel_handle, true);
+    esp_lcd_panel_disp_on_off(panel_handle, true);
+    if (LCD_PIN_BK_LIGHT >= 0) gpio_set_level(LCD_PIN_BK_LIGHT, 1);
+
+}
+
+// 播放标志
+
+static bool end_play = false;
+
+
+
+/**
+ * 回调函数
+ */
+
+
+ esp_err_t bsp_i2s_write(void *audio_buffer, size_t len, size_t *bytes_written, uint32_t timeout_ms)
+{
+    esp_err_t ret = ESP_OK;
+    ret = esp_codec_dev_write(codec_handle,audio_buffer, len);
+    *bytes_written = len;
+    return ret;
+}
+
+
+void video_write(frame_data_t *data, void *arg)
+{
+    if(end_play){
+         avi_player_play_stop(avi_player_handle);
+    }
+
+  if(isPause){
+            return ;
+        }
+    
+    jpeg_dec_handle_t jpeg_dec_handle = NULL;
+    jpeg_dec_io_t *jpeg_io = NULL;
+    jpeg_dec_header_info_t header_info;
+    esp_err_t err = ESP_OK;
+
+    uint8_t *rgb_buffer = (uint8_t *)heap_caps_aligned_alloc(16, 240 * 240 * 2, MALLOC_CAP_DMA);
+    if (rgb_buffer == NULL) {
+        ESP_LOGE("VIDEO_CB", "无法为 RGB 对齐缓冲区分配内存");
+        return;
+    }
+
+    jpeg_io = (jpeg_dec_io_t *)calloc(1, sizeof(jpeg_dec_io_t));
+    if (jpeg_io == NULL) {
+        ESP_LOGE("VIDEO_CB", "无法为 IO 结构体分配内存");
+        free(rgb_buffer);
+        return;
+    }
+
+    jpeg_dec_config_t jpeg_dec_cfg = {
+        .output_type = JPEG_PIXEL_FORMAT_RGB565_BE,
+        .rotate = JPEG_ROTATE_0D,
+    };
+
+    err = jpeg_dec_open(&jpeg_dec_cfg, &jpeg_dec_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("VIDEO_CB", "创建 JPEG 解码器失败 (0x%x)", err);
+        goto exit;
+    }
+
+    jpeg_io->inbuf = data->data;
+    jpeg_io->inbuf_len = data->data_bytes;
+    jpeg_io->outbuf = rgb_buffer;
+
+    err = jpeg_dec_parse_header(jpeg_dec_handle, jpeg_io, &header_info);
+    if (err != ESP_OK) {
+        ESP_LOGE("VIDEO_CB", "解析 JPEG 头部失败 (0x%x)", err);
+        goto exit;
+    }
+
+    err = jpeg_dec_process(jpeg_dec_handle, jpeg_io);
+    if (err == ESP_OK) {
+        extern esp_lcd_panel_handle_t panel_handle; 
+
+      
+
+        esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, header_info.width, header_info.height, rgb_buffer);
+    } else {
+        ESP_LOGE("VIDEO_CB", "JPEG 解码失败 (0x%x)", err);
+    }
+
+exit:
+    if (jpeg_dec_handle) {
+        jpeg_dec_close(jpeg_dec_handle);
+    }
+    if (jpeg_io) {
+        free(jpeg_io);
+    }
+    if (rgb_buffer) {
+        free(rgb_buffer);
+    }
+
+
+
+
+   
+   // ESP_LOGI(TAG_AVI, "Video write: %d", data->data_bytes);
+}
+
+void audio_write(frame_data_t *data, void *arg)
+{
+          size_t bytes_written = 0;
+
+          if(isPause){
+            return ;
+          }
+    bsp_i2s_write(data->data, data->data_bytes, &bytes_written, portMAX_DELAY);
+
+ //   ESP_LOGI(TAG_AVI, "Audio write: %d", data->data_bytes);
+}
+
+
+esp_err_t bsp_codec_set_fs(uint32_t rate, uint32_t bits_cfg, i2s_slot_mode_t ch)
+{
+    esp_err_t ret = ESP_OK;
+
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = rate,
+        .channel = ch,
+        .bits_per_sample = bits_cfg,
+    };
+    
+    if (codec_handle) {
+        ret = esp_codec_dev_close(codec_handle);
+    }
+    // if (record_dev_handle) {
+    //     ret |= esp_codec_dev_close(record_dev_handle);
+    //     ret |= esp_codec_dev_set_in_gain(record_dev_handle, CODEC_DEFAULT_ADC_VOLUME);
+    // }
+
+    if (codec_handle) {
+        ret |= esp_codec_dev_open(codec_handle, &fs);
+    }
+    // if (record_dev_handle) {
+    //     ret |= esp_codec_dev_open(record_dev_handle, &fs);
+    // }
+    return ret;
+}
+
+void audio_set_clock(uint32_t rate, uint32_t bits_cfg, uint32_t ch, void *arg)
+{
+    ESP_LOGI(TAG_AVI, "Audio set clock, rate %"PRIu32", bits %"PRIu32", ch %"PRIu32"", rate, bits_cfg, ch);
+      bsp_codec_set_fs(rate, bits_cfg, (i2s_slot_mode_t)ch);
+}
+
+void avi_play_end(void *arg)
+{
+    ESP_LOGI(TAG_AVI, "Play end");
+    end_play = true;
+}
+
+
+
+
+
+void video_task(void *arg)
+{
+    while (1) {
+
+        end_play = false;
+        isPause = false;
+
+        avi_player_config_t config = {
+            .buffer_size = 60 * 1024,
+            .audio_cb = audio_write,
+            .video_cb = video_write,
+            .audio_set_clock_cb = audio_set_clock,
+            .avi_play_end_cb = avi_play_end,
+            .stack_size = 4096,
+            .stack_in_psram = false,
+        };
+
+        avi_player_init(config, &avi_player_handle);
+
+        const char *file = video_list[video_index];
+        ESP_LOGI("AVI", "开始播放: %s", file);
+
+        avi_player_play_from_file(avi_player_handle, file);
+
+        // 等待播放完毕 或 stop
+        while (!end_play) {
+            vTaskDelay(20 / portTICK_PERIOD_MS);
+        }
+
+        avi_player_deinit(avi_player_handle);
+
+        // 自动切下一首
+        video_index++;
+        if(video_index >= video_count) video_index = 0;
+    }
+}
+
+
+// 按键回调
+
+
+
+
+static void button_single_click_vol_plus(void *arg,void *usr_data)
+{
+    example_voice_volime += 10 ;
+    if(example_voice_volime>=100){
+        example_voice_volime = 100 ;
+    }
+    esp_codec_dev_set_out_vol(codec_handle,  example_voice_volime);
+
+        ESP_LOGI("VOL", "音量增加，设置为: %d", example_voice_volime);
+
+}
+
+
+static void button_single_click_vol_minus(void *arg,void *usr_data)
+{
+    example_voice_volime -= 10 ;
+    if(example_voice_volime<=0){
+        example_voice_volime = 0 ;
+    }
+    esp_codec_dev_set_out_vol(codec_handle,  example_voice_volime);
+     ESP_LOGI("VOL", "音量减少，设置为: %d", example_voice_volime);
+
+}
+
+
+
+
+
+void button_vol_plus_init(){
+        const button_config_t btn_cfg = {0};
+    const button_gpio_config_t btn_gpio_cfg = {
+        .gpio_num = 1,
+        .active_level = 0,
+    };
+    button_handle_t gpio_btn = NULL;
+    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &gpio_btn);
+    
+    if (NULL == gpio_btn)
+    {
+        ESP_LOGE("BUT", "Button create failed");
+    }
+
+    iot_button_register_cb(gpio_btn, BUTTON_SINGLE_CLICK, NULL, button_single_click_vol_plus,NULL);
+
+}
+
+
+void button_vol_minus_init(){
+    const button_config_t btn_cfg = {0};
+    const button_gpio_config_t btn_gpio_cfg = {
+        .gpio_num = 18,
+        .active_level = 0,
+    };
+    button_handle_t gpio_btn = NULL;
+    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &gpio_btn);
+    
+    if (NULL == gpio_btn)
+    {
+        ESP_LOGE("BUT", "Button create failed");
+    }
+
+    iot_button_register_cb(gpio_btn, BUTTON_SINGLE_CLICK, NULL, button_single_click_vol_minus,NULL);
+
+
+
+
+}
+
+
+
+
+
+
+
+static void button_single_click_func(void *arg,void *usr_data)
+{
+   
+    isPause=false ; 
+     ESP_LOGE("BUT", "播放");
+}
+
+
+static void button_single_up_click_func(void *arg,void *usr_data)
+{
+   
+    isPause=true ; 
+     ESP_LOGE("BUT", "暂停");
+}
+
+
+
+// 功能按钮
+void button_func_init(){
+    const button_config_t btn_cfg = {0};
+    const button_gpio_config_t btn_gpio_cfg = {
+        .gpio_num = 11,
+        .active_level = 0,
+    };
+    button_handle_t gpio_btn = NULL;
+    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &gpio_btn);
+    
+    if (NULL == gpio_btn)
+    {
+        ESP_LOGE("BUT", "Button create failed");
+    }
+
+    iot_button_register_cb(gpio_btn, BUTTON_PRESS_DOWN, NULL, button_single_click_func,NULL);
+    iot_button_register_cb(gpio_btn, BUTTON_PRESS_UP, NULL, button_single_up_click_func,NULL);
+
+
+
+    
+}
+
+
+
+static void button_single_click_playnext(void *arg,void *usr_data)
+{
+ 
+    end_play = true;
+    avi_player_play_stop(avi_player_handle);
+    // video_index++;
+    // if (video_index >= video_count) {
+    //     video_index = 0;     // 循环播放
+    // }
+
+    ESP_LOGI("BUT", "切换到下一个视频");
+
+    // // 停止当前播放
+    // end_play = true;       // 让 avi_play 的 while 立即退出
+    // isPause = false;       // 取消暂停状态
+
+}
+
+
+
+
+void button_next_init(){
+    const button_config_t btn_cfg = {0};
+    const button_gpio_config_t btn_gpio_cfg = {
+        .gpio_num = 2,
+        .active_level = 0,
+    };
+    button_handle_t gpio_btn = NULL;
+    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &gpio_btn);
+    
+    if (NULL == gpio_btn)
+    {
+        ESP_LOGE("BUT", "Button create failed");
+    }
+
+    iot_button_register_cb(gpio_btn, BUTTON_SINGLE_CLICK, NULL, button_single_click_playnext,NULL);
+
+
+
+
+    
+}
+

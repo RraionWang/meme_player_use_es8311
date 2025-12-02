@@ -1,0 +1,1 @@
+ffmpeg -i cat.avi    -vcodec mjpeg    -pix_fmt yuvj420p    -q:v 8    -s 240x240    -r 15    -an    -f avi    -vtag MJPG    test_video_only.avi

@@ -23,8 +23,17 @@ init_littlefs() ;
     } else {
         ESP_LOGI(TAG, "es8311 codec init success");
     }
+lcd_init() ; 
+  
 
-xTaskCreate(i2s_music, "i2s_music", 4096, NULL, 5, NULL);
+ button_vol_plus_init() ;
+ button_vol_minus_init() ; 
+  button_func_init() ; 
+button_next_init() ; 
+
+
+// xTaskCreate(i2s_music, "i2s_music", 4096, NULL, 5, NULL);
+xTaskCreate(video_task, "video_task", 8192, NULL, 5, NULL);
 
 
 }
