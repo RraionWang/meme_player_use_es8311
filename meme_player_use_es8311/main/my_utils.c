@@ -490,15 +490,19 @@ esp_err_t bsp_i2s_write(void *audio_buffer, size_t len, size_t *bytes_written, u
 
 void video_write(frame_data_t *data, void *arg)
 {
+
+     if (isPause)
+    {
+        return;
+    }
+
+
     if (end_play)
     {
         avi_player_play_stop(avi_player_handle);
     }
 
-    if (isPause)
-    {
-        return;
-    }
+   
 
     jpeg_dec_handle_t jpeg_dec_handle = NULL;
     jpeg_dec_io_t *jpeg_io = NULL;
@@ -626,7 +630,7 @@ void audio_set_clock(uint32_t rate, uint32_t bits_cfg, uint32_t ch, void *arg)
 void avi_play_end(void *arg)
 {
     ESP_LOGI(TAG_AVI, "Play end");
-    end_play = true;
+   // end_play = true;
 }
 
 void video_task(void *arg)
@@ -658,6 +662,7 @@ void video_task(void *arg)
         while (!end_play)
         {
             vTaskDelay(20 / portTICK_PERIOD_MS);
+            ESP_LOGI("AVI", "播放状态 - 结束: %d, 暂停: %d", end_play, isPause);
         }
 
         avi_player_deinit(avi_player_handle);
@@ -776,15 +781,38 @@ static void button_single_click_func(void *arg, void *usr_data)
 {
 
     isPause = false;
-    ESP_LOGE("BUT", "播放");
+    ESP_LOGI("BUT", "播放");
 }
 
 static void button_single_up_click_func(void *arg, void *usr_data)
 {
 
     isPause = true;
-    ESP_LOGE("BUT", "暂停");
+
+    
+
+
+    
+    ESP_LOGI("BUT", "暂停");
 }
+
+
+static void button_single_click_replay(void *arg, void *usr_data)
+{
+
+    end_play = true;
+    avi_player_play_stop(avi_player_handle);
+    video_index--;
+
+    // if (video_index <= 0) {
+    //     video_index = 0;     // 循环播放
+    // }
+
+    ESP_LOGI("BUT", "重播");
+    // ESP_LOGI("BUT", "当前序号%d",video_index);
+
+}
+
 
 // 功能按钮
 void button_func_init()
@@ -802,8 +830,11 @@ void button_func_init()
         ESP_LOGE("BUT", "Button create failed");
     }
 
-    iot_button_register_cb(gpio_btn, BUTTON_PRESS_DOWN, NULL, button_single_click_func, NULL);
-    iot_button_register_cb(gpio_btn, BUTTON_PRESS_UP, NULL, button_single_up_click_func, NULL);
+    // iot_button_register_cb(gpio_btn, BUTTON_PRESS_DOWN, NULL, button_single_click_func, NULL);
+    // iot_button_register_cb(gpio_btn, BUTTON_PRESS_UP, NULL, button_single_up_click_func, NULL);
+
+    iot_button_register_cb(gpio_btn, BUTTON_SINGLE_CLICK, NULL, button_single_click_replay, NULL);
+
 }
 
 static void button_single_click_playnext(void *arg, void *usr_data)
