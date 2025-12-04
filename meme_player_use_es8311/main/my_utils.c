@@ -453,33 +453,14 @@ void draw_osd_info(void)
 
         char text[64];
 
-        if (charg_status == -0)
-        {
-            snprintf(text, sizeof(text),
-                     "Bri:%2d Vol:%2d BAT:%2d %s",
+
+
+        snprintf(text, sizeof(text),
+                     "Bri:%2d Vol:%2d BAT:%2d ",
                      lcd_lightness,
                      example_voice_volime,
-                     bat_remian,
-                     "NCHG");
-        }
-        else if (charg_status == 1)
-        {
-            snprintf(text, sizeof(text),
-                     "Bri:%2d Vol:%2d BAT:%2d %s",
-                     lcd_lightness,
-                     example_voice_volime,
-                     bat_remian,
-                     "CHGING");
-        }
-        else
-        {
-            snprintf(text, sizeof(text),
-                     "Bri:%2d Vol:%2d BAT:%2d %s",
-                     lcd_lightness,
-                     example_voice_volime,
-                     bat_remian,
-                     "");
-        }
+                     bat_remian
+                     );
 
         draw_text(osd_buf, 240, 1, 1, text, RGB565(255, 255, 255));
 
@@ -587,7 +568,8 @@ exit:
     }
     if (rgb_buffer)
     {
-        free(rgb_buffer);
+        // free(rgb_buffer);
+        heap_caps_free(rgb_buffer) ; 
     }
 
     // ESP_LOGI(TAG_AVI, "Video write: %d", data->data_bytes);
