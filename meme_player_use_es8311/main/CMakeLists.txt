@@ -1,6 +1,6 @@
-idf_component_register(SRCS "my_utils.c" "main.c" 
+idf_component_register(SRCS "battery_monitor.c" "font8x16.c" "my_utils.c" "main.c"  
   EMBED_FILES "canon.pcm"
-       PRIV_REQUIRES esp_driver_i2s esp_driver_i2c esp_driver_gpio esp_lcd
+       PRIV_REQUIRES esp_driver_i2s esp_driver_i2c esp_driver_gpio esp_lcd nvs_flash
                     INCLUDE_DIRS ".")
 
 

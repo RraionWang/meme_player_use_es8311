@@ -18,7 +18,10 @@
   "files.associations": {
     "my_utils.h": "c",
     "i2c_master.h": "c",
-    "button_gpio.h": "c"
+    "button_gpio.h": "c",
+    "cstdint": "cpp",
+    "battery_monitor.h": "c",
+    "esp_err.h": "c"
   },
   "idf.flashType": "UART",
   "idf.portWin": "COM18"
